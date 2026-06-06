@@ -274,7 +274,6 @@ void handleMessage(const String &payload) {
   JsonDocument doc;
   if (deserializeJson(doc, payload)) return;
   String type = doc["type"] | "";
-  Serial.printf("[msg] %s\n", type.c_str());
 
   if (type == "relay") {
     String ev = String((const char *)(doc["event"] | ""));

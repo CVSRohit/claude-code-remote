@@ -29,6 +29,14 @@ Three components, one per folder:
 | `bridge/` | Your PC | The "runner". Dials out to the relay, drives Claude Code via the Agent SDK against your local files. |
 | `firmware/` | ESP32 | The handheld remote (PlatformIO). |
 
+## 🛠 Build one yourself
+
+Full parts list, wiring, 3D-printed case, and step-by-step assembly are in
+**[docs/BUILD.md](docs/BUILD.md)**. Printable STLs (base, lid, fit-test) and the
+parametric source live in **[hardware/case](hardware/case)**.
+
+![case preview](hardware/case/case-preview.png)
+
 ## Two modes (toggle on-device — top menu row, press ✓)
 
 - **ask**  — the SDK `canUseTool` callback *blocks* on each tool call; the screen
@@ -129,9 +137,10 @@ the runner uses `bypassPermissions`, so treat the token like a key to your shell
 
 ## 3D-printed enclosure
 
-A handheld case with a window for the 1.3" panel and four button holes is an easy
-print. Lay out **▲/▼** as a vertical rocker on the left and **✓(green)/✗(red)**
-along the bottom, so the approve/deny pair is reachable by thumb without looking.
+A two-part handheld case (base + lid) is in [`hardware/case`](hardware/case) —
+printable STLs plus a parametric OpenSCAD source you can tweak to your exact
+boards. **Print `fit-test.stl` first** to check the screen/button fit. See the
+[build guide](docs/BUILD.md#3-print-the-case) for print settings and assembly.
 
 ## Notes & extensions
 

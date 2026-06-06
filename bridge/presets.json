@@ -1,5 +1,5 @@
 {
-  "defaultCwd": "C:/Users/Rohit/Desktop/Dev/Hardware/ESP32-Projects",
+  "defaultCwd": "C:/Users/Rohit/Desktop/Dev/Hardware/ESP32-Projects/24-claude-code-remote",
   "items": [
     {
       "label": "Summarize git diff",
@@ -19,8 +19,7 @@
     },
     {
       "label": "Commit & describe",
-      "prompt": "Stage all changes and write a concise conventional-commit message. Show me the message before committing.",
-      "cwd": "C:/Users/Rohit/Desktop/Dev/Hardware"
+      "prompt": "Stage all changes and write a concise conventional-commit message. Show me the message before committing."
     }
   ]
 }
