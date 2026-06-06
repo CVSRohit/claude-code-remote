@@ -1,0 +1,26 @@
+{
+  "defaultCwd": "C:/Users/Rohit/Desktop/Dev/Hardware/ESP32-Projects",
+  "items": [
+    {
+      "label": "Summarize git diff",
+      "prompt": "Give me a 3-bullet summary of the current uncommitted git diff."
+    },
+    {
+      "label": "Run tests",
+      "prompt": "Find and run this project's test suite. Report pass/fail counts only."
+    },
+    {
+      "label": "Explain this repo",
+      "prompt": "In 4 sentences, explain what this repository does and its main entry points."
+    },
+    {
+      "label": "Fix lint errors",
+      "prompt": "Find and fix any linter or compiler errors in the project. Keep changes minimal."
+    },
+    {
+      "label": "Commit & describe",
+      "prompt": "Stage all changes and write a concise conventional-commit message. Show me the message before committing.",
+      "cwd": "C:/Users/Rohit/Desktop/Dev/Hardware"
+    }
+  ]
+}

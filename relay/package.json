@@ -1,0 +1,13 @@
+{
+  "name": "claude-remote-relay",
+  "private": true,
+  "type": "module",
+  "description": "Token-paired WebSocket relay between the ESP32 device and the local Agent SDK runner",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

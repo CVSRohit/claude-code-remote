@@ -1,0 +1,7 @@
+# secrets & deps — never commit
+bridge/.env
+relay/.token
+firmware/include/secrets.h
+**/node_modules/
+firmware/.pio/
+*.log
