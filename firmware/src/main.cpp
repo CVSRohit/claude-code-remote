@@ -62,13 +62,19 @@ static const int PIN_BACK = 33;  // ✗ red
 TFT_eSPI tft = TFT_eSPI();
 WebSocketsClient ws;
 
-enum UiState { ST_BOOT, ST_MENU, ST_RUNNING, ST_APPROVAL, ST_RESULT };
+enum UiState { ST_BOOT, ST_SESSIONS, ST_MENU, ST_RUNNING, ST_APPROVAL, ST_RESULT };
 UiState state = ST_BOOT;
 
 static const int MAX_PRESETS = 10;
 String presetLabels[MAX_PRESETS];
 int presetCount = 0;
 int selection = 0; // 0 = mode row, 1..presetCount = presets
+
+static const int MAX_SESSIONS = 8;
+String sessionNames[MAX_SESSIONS];
+String sessionIds[MAX_SESSIONS];
+int sessionCount = 0;
+int sessionSel = 0;
 
 String currentMode = "ask";
 String statusText = "Connecting…";
@@ -202,6 +208,27 @@ void draw() {
       tft.drawString(statusText, 120, 130, 2);
       break;
 
+    case ST_SESSIONS: {
+      header("SESSIONS", COL_ACCENT);
+      if (sessionCount == 0) {
+        tft.setTextColor(COL_DIM, COL_BG);
+        tft.setTextDatum(MC_DATUM);
+        tft.drawString("No sessions online", 120, 115, 2);
+        tft.drawString("start the runner on your PC", 120, 145, 1);
+      } else {
+        for (int i = 0; i < sessionCount && i < 9; i++) {
+          int y = 34 + i * 20;
+          bool sel = (i == sessionSel);
+          if (sel) tft.fillRect(0, y - 2, 240, 19, COL_ACCENT);
+          tft.setTextColor(sel ? TFT_BLACK : TFT_WHITE, sel ? COL_ACCENT : COL_BG);
+          tft.setTextDatum(ML_DATUM);
+          tft.drawString(sessionNames[i], 8, y + 7, 2);
+        }
+      }
+      footer("UP/DN move   OK = control");
+      break;
+    }
+
     case ST_MENU: {
       String h = "MODE: " + currentMode;
       header(h.c_str(), COL_ACCENT);
@@ -277,10 +304,28 @@ void handleMessage(const String &payload) {
 
   if (type == "relay") {
     String ev = String((const char *)(doc["event"] | ""));
-    if (ev == "peer-offline") statusText = "Runner offline";
-    else if (ev == "peer-online") statusText = "Runner online";
-    else if (ev == "paired") statusText = (doc["peer"] | false) ? "Runner online" : "Waiting for runner";
-    else if (ev == "error") statusText = String((const char *)(doc["text"] | "relay error"));
+    if (ev == "session-offline") {
+      statusText = "Session offline";
+      state = ST_SESSIONS;
+      JsonDocument d; d["type"] = "list"; sendJson(d); // refresh the picker
+    } else if (ev == "error") {
+      statusText = String((const char *)(doc["text"] | "relay error"));
+    }
+    dirty = true;
+    return;
+  }
+
+  if (type == "sessions") {
+    sessionCount = 0;
+    for (JsonObject it : doc["items"].as<JsonArray>()) {
+      if (sessionCount < MAX_SESSIONS) {
+        sessionIds[sessionCount] = String((const char *)(it["id"] | ""));
+        sessionNames[sessionCount] = String((const char *)(it["name"] | "session"));
+        sessionCount++;
+      }
+    }
+    if (sessionSel >= sessionCount) sessionSel = 0;
+    if (state == ST_BOOT || state == ST_SESSIONS) state = ST_SESSIONS;
     dirty = true;
     return;
   }
@@ -362,6 +407,16 @@ void wsEvent(WStype_t type, uint8_t *payload, size_t len) {
 }
 
 // ---------- ACTIONS ----------
+void selectSession(int idx) {
+  JsonDocument d;
+  d["type"] = "select";
+  d["id"] = sessionIds[idx];
+  sendJson(d);
+  statusText = "Loading session…";
+  state = ST_BOOT;
+  dirty = true;
+}
+
 void launchPreset(int idx) {
   JsonDocument d;
   d["type"] = "launch";
@@ -444,7 +499,19 @@ void loop() {
   bool ok = btnOk.pressed();
   bool back = btnBack.pressed();
 
+  if (up || down || ok || back)
+    Serial.printf("[btn] %s%s%s%s (state=%d)\n",
+                  up ? "UP " : "", down ? "DOWN " : "",
+                  ok ? "OK " : "", back ? "BACK " : "", (int)state);
+
   switch (state) {
+    case ST_SESSIONS:
+      if (sessionCount > 0 && (up || down)) {
+        sessionSel = (sessionSel + (down ? 1 : -1) + sessionCount) % sessionCount;
+        dirty = true;
+      }
+      if (ok && sessionCount > 0) selectSession(sessionSel);
+      break;
     case ST_MENU: {
       int rows = presetCount + 1;
       if (rows > 0 && (up || down)) {
@@ -454,6 +521,11 @@ void loop() {
       if (ok) {
         if (selection == 0) toggleMode();
         else launchPreset(selection - 1);
+      }
+      if (back) { // back to the session picker
+        state = ST_SESSIONS;
+        JsonDocument d; d["type"] = "list"; sendJson(d);
+        dirty = true;
       }
       break;
     }

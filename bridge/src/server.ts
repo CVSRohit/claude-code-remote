@@ -27,7 +27,7 @@
 import { WebSocket } from "ws";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Load RELAY_URL / RELAY_TOKEN from bridge/.env if present (Node 22+).
@@ -35,6 +35,14 @@ try {
   (process as any).loadEnvFile?.();
 } catch {
   /* no .env — rely on real env vars */
+}
+
+// An OAuth token (sk-ant-oat…) wrongly placed in ANTHROPIC_API_KEY makes Claude
+// Code report "Invalid API key · Fix external API key" and exit 1. Drop it so the
+// Agent SDK falls back to your normal Claude Code login (subscription/OAuth).
+if (process.env.ANTHROPIC_API_KEY?.startsWith("sk-ant-oat")) {
+  console.warn("Ignoring ANTHROPIC_API_KEY (looks like an OAuth token) — using Claude Code login.");
+  delete process.env.ANTHROPIC_API_KEY;
 }
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -48,8 +56,10 @@ const presets: PresetFile = JSON.parse(
   readFileSync(join(__dirname, "..", "presets.json"), "utf8"),
 );
 
+// Name shown in the device's session picker. Defaults to the working folder.
+const SESSION_NAME = process.env.SESSION_NAME ?? basename(presets.defaultCwd);
+
 let sock: WebSocket | null = null;
-let deviceOnline = false;
 let mode: "ask" | "auto" = "ask";
 let busy = false;
 /** Set while a query runs so an "interrupt" message can abort it. */
@@ -247,7 +257,7 @@ function connect(): void {
 
   sock.on("open", () => {
     console.log("Relay connected — registering as runner.");
-    send({ type: "hello", role: "runner", token: RELAY_TOKEN });
+    send({ type: "hello", role: "runner", token: RELAY_TOKEN, name: SESSION_NAME });
   });
 
   sock.on("message", (raw) => {
@@ -261,22 +271,11 @@ function connect(): void {
     if (msg.type === "relay") {
       switch (msg.event) {
         case "paired":
-          deviceOnline = !!msg.peer;
-          console.log(`Paired with relay (device online: ${deviceOnline}).`);
-          if (deviceOnline) sendPresets();
+          console.log(`Paired with relay as session "${SESSION_NAME}" (id ${msg.id}).`);
           break;
-        case "peer-online":
-          if (msg.role === "device") {
-            deviceOnline = true;
-            console.log("Device came online — sending presets.");
-            sendPresets();
-          }
-          break;
-        case "peer-offline":
-          if (msg.role === "device") {
-            deviceOnline = false;
-            console.log("Device went offline.");
-          }
+        case "device-attached":
+          console.log("Device attached — sending presets.");
+          sendPresets();
           break;
         case "error":
           console.error(`Relay rejected us: ${msg.text}`);
@@ -290,7 +289,6 @@ function connect(): void {
 
   sock.on("close", () => {
     console.log("Relay disconnected — reconnecting in 3s.");
-    deviceOnline = false;
     sock = null;
     // Unblock any pending approvals so a hung query can unwind.
     for (const resolve of pending.values()) resolve(false);
