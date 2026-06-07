@@ -102,11 +102,14 @@ pio device monitor
 | SDA/MOSI | GPIO23 | | ✗ BACK (red) | GPIO33 → GND |
 | RES/RST | GPIO4 | | | |
 | DC     | GPIO2 | | | |
-| BLK    | 3V3   | | | |
+| BLK    | GPIO32 | | | |
 
 - **No CS pin** — these 7-pin boards have CS tied active internally; `platformio.ini`
   sets `TFT_CS=-1`. Leave it unconnected.
 - **VCC = 3.3V, not 5V** (the panel logic is 3.3V; no onboard regulator).
+- **BLK → GPIO32** so firmware controls the backlight: it sleeps after 60s idle
+  and wakes on any button or an incoming approval. Prefer always-on? Wire BLK to
+  3V3 instead (the screen just won't sleep).
 - Buttons are bare tactile switches, one leg to the GPIO and one to GND — internal
   pull-ups, no resistors.
 - SPI is set to 27 MHz in `platformio.ini`; drop it (e.g. 10 MHz) if a long/cheap

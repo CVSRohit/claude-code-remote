@@ -47,9 +47,12 @@ All display power is **3.3V** (not 5V). All grounds are common.
 | SDA | GPIO23 |
 | RES | GPIO4 |
 | DC  | GPIO2 |
-| BLK | 3V3 |
+| BLK | GPIO32 |
 
 > No CS pin — the firmware sets `TFT_CS=-1`. Leave it unconnected.
+> BLK is on GPIO32 (not 3V3) so the firmware can sleep the backlight after 60s
+> idle and wake on a button/approval. Wire BLK to 3V3 instead if you want it
+> always on.
 
 ### Buttons → ESP32
 

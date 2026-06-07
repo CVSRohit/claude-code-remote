@@ -56,6 +56,7 @@ static const int PIN_UP = 25;   // ▲
 static const int PIN_DOWN = 26;  // ▼
 static const int PIN_OK = 27;    // ✓ green
 static const int PIN_BACK = 33;  // ✗ red
+static const int PIN_BL = 32;    // backlight enable (move display BLK here from 3V3)
 // TFT pins are set in platformio.ini build flags.
 
 // ---------- GLOBALS ----------
@@ -90,6 +91,11 @@ int scroll = 0;          // line offset for scrollable views
 bool followBottom = true; // auto-stick RUNNING log to the newest line
 bool dirty = true;        // redraw flag
 bool wsUp = false;        // websocket connected (diagnostics)
+bool screenAsleep = false;       // backlight off after idle
+uint32_t lastActivity = 0;       // last button / message time
+static const uint32_t SLEEP_MS = 60000; // idle timeout before backlight off
+void wake();        // forward decls (used in handleMessage, defined near setup)
+void sleepScreen();
 
 // ---------- COLORS ----------
 #define COL_BG TFT_BLACK
@@ -371,7 +377,7 @@ void handleMessage(const String &payload) {
     followBottom = false;
     state = ST_RESULT;
   }
-  dirty = true;
+  wake(); // any runner message lights the screen + resets the idle timer
 }
 
 void wsEvent(WStype_t type, uint8_t *payload, size_t len) {
@@ -453,6 +459,22 @@ void sendInterrupt() {
   dirty = true;
 }
 
+// ---------- SLEEP ----------
+void wake() {
+  lastActivity = millis();
+  if (screenAsleep) {
+    screenAsleep = false;
+    digitalWrite(PIN_BL, HIGH);
+    tft.writecommand(0x29); // DISPON
+  }
+  dirty = true;
+}
+void sleepScreen() {
+  screenAsleep = true;
+  tft.writecommand(0x28); // DISPOFF
+  digitalWrite(PIN_BL, LOW);
+}
+
 // ---------- SETUP / LOOP ----------
 void setup() {
   Serial.begin(115200);
@@ -460,6 +482,9 @@ void setup() {
   pinMode(PIN_DOWN, INPUT_PULLUP);
   pinMode(PIN_OK, INPUT_PULLUP);
   pinMode(PIN_BACK, INPUT_PULLUP);
+  pinMode(PIN_BL, OUTPUT);
+  digitalWrite(PIN_BL, HIGH); // backlight on
+  lastActivity = millis();
 
   Serial.println("[tft] init");
   tft.init();
@@ -499,10 +524,19 @@ void loop() {
   bool ok = btnOk.pressed();
   bool back = btnBack.pressed();
 
-  if (up || down || ok || back)
+  bool anyBtn = up || down || ok || back;
+  if (anyBtn) {
     Serial.printf("[btn] %s%s%s%s (state=%d)\n",
                   up ? "UP " : "", down ? "DOWN " : "",
                   ok ? "OK " : "", back ? "BACK " : "", (int)state);
+    lastActivity = millis();
+  }
+
+  // While asleep, the first press only wakes the screen — it doesn't act.
+  if (screenAsleep) {
+    if (anyBtn) wake();
+    up = down = ok = back = false;
+  }
 
   switch (state) {
     case ST_SESSIONS:
@@ -549,6 +583,8 @@ void loop() {
       break;
   }
 
+  if (!screenAsleep && millis() - lastActivity > SLEEP_MS) sleepScreen();
+
   static uint32_t lastHb = 0;
   if (millis() - lastHb > 5000) {
     lastHb = millis();
@@ -557,7 +593,7 @@ void loop() {
                   (int)state, statusText.c_str());
   }
 
-  if (dirty) {
+  if (dirty && !screenAsleep) {
     dirty = false;
     draw();
   }
