@@ -1,139 +1,128 @@
 /* ============================================================
-   Claude Code Remote — handheld enclosure (parametric)
+   Claude Code Remote — custom handheld case (v3)
 
-   Two printed parts:
-     - base : tray holding the ESP32 dev board (USB cutout + 4 screw posts)
-     - lid  : front plate with the screen window + 4 button wells
-
-   IMPORTANT: dimensions are NOMINAL. ESP32 dev boards and 1.3" ST7789
-   modules vary a few mm between vendors. Print the FIT-TEST first, check
-   it against YOUR boards, then tweak the CONFIG block and re-render.
+   Layout:
+     - ESP32 (52x28, USB-C) + ST7789 stacked on the RIGHT side of the case.
+     - A LEFT CHANNEL runs alongside the boards; the two SCROLL buttons (▲ ▼)
+       stand vertically in it, caps facing OUT the left wall (perpendicular to
+       the boards), bodies wedged against the boards' left edges.
+     - Screen window at the TOP (over the boards); two ACTION buttons (✓ ✗)
+       on the face just below the screen.
+     - 2 screws in the left channel (top + bottom), clear of the side buttons.
 
    Render:
-     openscad -o base.stl     -D 'part="base"'    claude-code-remote-case.scad
-     openscad -o lid.stl      -D 'part="lid"'     claude-code-remote-case.scad
-     openscad -o fit-test.stl -D 'part="fittest"' claude-code-remote-case.scad
+     openscad -o base.stl -D pn=1 claude-code-remote-case.scad
+     openscad -o lid.stl  -D pn=2 claude-code-remote-case.scad
    ============================================================ */
 
-part = "both";   // "base" | "lid" | "both" | "fittest"
+part = "both";
+pn = -1;  // CLI: 0 both, 1 base, 2 lid
 
 /* ---------------- CONFIG (measure & adjust) ---------------- */
-inner_w   = 31;     // cavity width  (ESP32 PCB width + clearance; 38-pin ~28.5)
-inner_l   = 82;     // cavity length (screen on top + button cluster below)
-inner_d   = 22;     // cavity depth  (screen + jumpers + ESP32 stack)
+// ESP32
+esp_l   = 52;
+esp_w   = 28;
+esp_h   = 13;     // ESP32 height incl. soldered pins
+stack_h = 17;     // ESP32 + ST bolted together (measured)
+usb_w   = 9.2;
+usb_h   = 3.2;
+usb_cz  = 3.0;    // USB-C centre height above floor — CONFIRM
 
-wall      = 2.4;    // wall thickness
-gap       = 0.4;    // tolerance between base cavity and lid lip
-fillet    = 3;      // outer corner radius
+// Screen (ST7789)
+scr_pcb_w = 28;
+scr_pcb_l = 39;
+scr_pcb_t = 1.8;
+scr_win_w = 26;   // +1mm wider
+scr_win_h = 30;
+scr_cy    = 7;    // screen centre toward the TOP
+scr_gap   = 6;    // gap ESP32 top -> screen — CONFIRM
 
-// Screen (1.3" ST7789 240x240): active ~23.4mm, PCB ~26 x 38
-screen_win   = 24;      // square window for the active area
-screen_pcb_w = 26.5;    // PCB width  (recess)
-screen_pcb_l = 38.5;    // PCB length (recess)
-screen_y     = 19;      // window centre from inner CENTRE, toward the top
-ledge        = 1.4;     // front ledge the screen rests behind
+// Buttons: 12x12x5 DIP tactile, 7mm round cap
+btn       = 12.4; // square body footprint
+btn_hole  = 7.6;  // round cap hole
+btn_depth = 3;    // switch body depth into the channel
+fbtn_y    = -20;  // action buttons centre line, clear of the ST PCB above
+fbtn_dx   = 7.5;  // their left/right spacing
+sbtn_y1   = 7;    // scroll ▲ (left channel, toward top)
+sbtn_y2   = -7;   // scroll ▼ (left channel, toward bottom)
 
-// Buttons (6x6 mm tactile, loose-wired): ▲▼ on left, ✓✗ on right
-btn_body   = 6.6;       // square well for the switch body
-btn_hole   = 4.0;       // plunger hole through the face
-btn_dx     = 9;         // horizontal spacing from cluster centre
-btn_dy     = 8;         // vertical spacing from cluster centre
-btn_y      = -21;       // button cluster centre, from inner centre (toward bottom)
-
-// Screws — M2 self-tapping into printed posts
-screw_pilot = 1.7;      // pilot hole in the post (M2 self-tap)
-screw_clear = 2.4;      // clearance hole in the lid
-screw_head  = 4.2;      // countersink dia
-post_d      = 5.5;
-post_inset  = 4.0;      // post centre inset from inner corner
+// Case
+channel_w  = 6;     // left channel width for the side buttons (3mm switch + room)
+right_clear = 1.5;  // clearance on the board (right) side
+wall   = 1.6;   // base wall thickness (4 perimeters @ 0.4 nozzle)
+gap    = 0.4;
+fillet = 3;
+lip_h  = 4;
+lip_wall = 1.6;
+screw_pilot = 1.7;
+screw_clear = 2.4;
+screw_head  = 4.2;
+post_d      = 5.0;
+post_inset  = 3.0;
 
 $fn = 56;
 
 /* ---------------- DERIVED ---------------- */
-out_w  = inner_w + 2*wall;
-out_l  = inner_l + 2*wall;
-base_d = inner_d + wall;     // total base height (floor + walls)
-lid_t  = wall;               // face-plate thickness
-lip_h  = 4;                  // lid lip nesting depth
-lip_wall = 1.6;              // lid lip wall (thin frame, clears posts)
+inner_w = esp_w + right_clear + channel_w;          // boards right, channel left
+inner_l = esp_l + 3;
+inner_d = stack_h + 1.5;                             // fit the bolted ESP32+ST stack
+board_cx = inner_w / 2 - right_clear - esp_w / 2;   // board centre, shifted right
+sbtn_z  = wall + inner_d / 2;                        // side button centre depth
+out_w = inner_w + 2 * wall;
+out_l = inner_l + 2 * wall;
+base_d = inner_d + wall;
+lid_t  = 1.4;   // thin face so 3mm button caps poke through (matches screen bezel)
 
 /* ---------------- HELPERS ---------------- */
-module rbox(w, l, h, r) {            // rounded rectangular prism (XY fillet)
-  hull() for (x=[-1,1], y=[-1,1])
-    translate([x*(w/2-r), y*(l/2-r), 0]) cylinder(h=h, r=r);
+module rbox(w, l, h, r) {
+  hull() for (x = [-1, 1], y = [-1, 1])
+    translate([x * (w / 2 - r), y * (l / 2 - r), 0]) cylinder(h = h, r = r);
 }
-module post_xy() {                   // 2 screw posts at the BOTTOM corners
-  for (x=[-1,1])                     // (top edge is held by the lid lip; the
-    translate([x*(inner_w/2-post_inset), -(inner_l/2-post_inset), 0]) children();  // wide screen leaves no room for top posts)
+module post_xy() {  // 2 posts in the LEFT channel (top + bottom)
+  for (y = [-1, 1])
+    translate([-(inner_w / 2 - post_inset), y * (inner_l / 2 - post_inset), 0]) children();
 }
-btns = [[-btn_dx, btn_y+btn_dy],     // UP    (left, upper)
-        [-btn_dx, btn_y-btn_dy],     // DOWN  (left, lower)
-        [ btn_dx, btn_y+btn_dy],     // OK    (right, upper)
-        [ btn_dx, btn_y-btn_dy]];    // BACK  (right, lower)
 
 /* ---------------- BASE ---------------- */
 module base() {
   difference() {
     rbox(out_w, out_l, base_d, fillet);
-    translate([0,0,wall]) rbox(inner_w, inner_l, base_d, max(0.6, fillet-wall));
-    // USB cutout, centred on one short end wall
-    translate([0, -out_l/2, wall+3]) cube([13, 3*wall, 8], center=true);
+    translate([0, 0, wall]) rbox(inner_w, inner_l, base_d, max(0.6, fillet - wall));
+    // USB-C on bottom end wall, aligned to the board (shifted right)
+    translate([board_cx, -out_l / 2, wall + usb_cz]) cube([usb_w, 3 * wall, usb_h], center = true);
+    // scroll buttons: round cap holes through the LEFT (-x) wall only
+    for (yy = [sbtn_y1, sbtn_y2])
+      translate([-out_w / 2 - 1, yy, sbtn_z]) rotate([0, 90, 0]) cylinder(h = wall + 3, d = btn_hole);
   }
-  // corner posts with pilot holes (overlap floor by 1mm so they fuse cleanly)
-  translate([0,0,wall-1]) difference() {
-    post_xy() cylinder(h=base_d-wall+1, d=post_d);
-    post_xy() translate([0,0,-1]) cylinder(h=base_d+2, d=screw_pilot);
-  }
+  // (side-button switches glue into the channel; base+lid glue/tape together)
 }
 
 /* ---------------- LID ---------------- */
 module lid() {
   difference() {
     union() {
-      rbox(out_w, out_l, lid_t, fillet);                  // face plate
-      // nesting lip as a thin perimeter frame (clears the posts)
-      translate([0,0,lid_t-0.5]) difference() {       // overlap plate so it fuses
-        rbox(inner_w-2*gap, inner_l-2*gap, lip_h+0.5, max(0.6, fillet-wall));
-        translate([0,0,-1]) rbox(inner_w-2*gap-2*lip_wall, inner_l-2*gap-2*lip_wall, lip_h+2.5, 1);
+      rbox(out_w, out_l, lid_t, fillet);
+      translate([0, 0, lid_t - 0.5]) difference() {
+        rbox(inner_w - 2 * gap, inner_l - 2 * gap, lip_h + 0.5, max(0.6, fillet - wall));
+        translate([0, 0, -1]) rbox(inner_w - 2 * gap - 2 * lip_wall, inner_l - 2 * gap - 2 * lip_wall, lip_h + 2.5, 1);
       }
     }
-    // screen PCB recess from the inside (leaves a front bezel of `ledge`)
-    translate([-screen_pcb_w/2, screen_y-screen_pcb_l/2, ledge])
-      cube([screen_pcb_w, screen_pcb_l, lid_t+lip_h+2]);
-    // screen window through the ledge
-    translate([0, screen_y, -1])
-      linear_extrude(lid_t+lip_h+2) square([screen_win, screen_win], center=true);
-    // button plunger holes through the face
-    for (b=btns) translate([b[0], b[1], -1]) cylinder(h=lid_t+2, d=btn_hole);
-    // button body wells (pockets on the inside)
-    for (b=btns) translate([b[0], b[1], lid_t])
-      linear_extrude(lip_h+1) square([btn_body, btn_body], center=true);
-    // screw clearance holes + front countersink
-    post_xy() translate([0,0,-1]) cylinder(h=lid_t+lip_h+2, d=screw_clear);
-    post_xy() translate([0,0,-0.01]) cylinder(h=1.8, d=screw_head);
+    // screen PCB recess (bezel ~1.4mm), shifted right over the boards
+    translate([board_cx - scr_pcb_w / 2, scr_cy - scr_pcb_l / 2, 1.4])
+      cube([scr_pcb_w, scr_pcb_l, lid_t + lip_h + 2]);
+    // screen window
+    translate([board_cx, scr_cy, -1])
+      linear_extrude(lid_t + lip_h + 2) square([scr_win_w, scr_win_h], center = true);
+    // action buttons below the screen (cap holes + 12x12 body wells)
+    for (x = [-1, 1]) {
+      translate([board_cx + x * fbtn_dx, fbtn_y, -1]) cylinder(h = lid_t + 2, d = btn_hole);
+      translate([board_cx + x * fbtn_dx, fbtn_y, lid_t]) linear_extrude(lip_h + 1) square([btn, btn], center = true);
+    }
   }
 }
 
-/* ---------------- FIT-TEST (fast, cheap) ----------------
-   Just the screen window + 4 button holes in a thin strip, to verify
-   the screen fit and button spacing before printing the whole case. */
-module fittest() {
-  difference() {
-    rbox(screen_pcb_w+8, out_l, lid_t, fillet);
-    translate([0, screen_y, -1]) linear_extrude(lid_t+2) square([screen_win, screen_win], center=true);
-    for (b=btns) translate([b[0], b[1], -1]) cylinder(h=lid_t+2, d=btn_hole);
-  }
-}
-
-/* ---------------- RENDER ----------------
-   GUI: set `part` above. CLI: pass a numeric `pn` (no shell-quoting issues):
-     openscad -o base.stl     -D pn=1 claude-code-remote-case.scad
-     openscad -o lid.stl      -D pn=2 claude-code-remote-case.scad
-     openscad -o fit-test.stl -D pn=3 claude-code-remote-case.scad */
-pn = -1;   // CLI override: 0=both 1=base 2=lid 3=fittest ; -1 = use `part`
-sel = pn==0 ? "both" : pn==1 ? "base" : pn==2 ? "lid" : pn==3 ? "fittest" : part;
-
-if      (sel=="base")    base();
-else if (sel=="lid")     lid();
-else if (sel=="fittest") fittest();
-else { base(); translate([out_w+10,0,0]) lid(); }   // "both" preview
+/* ---------------- RENDER ---------------- */
+sel = pn == 0 ? "both" : pn == 1 ? "base" : pn == 2 ? "lid" : part;
+if (sel == "base") base();
+else if (sel == "lid") lid();
+else { base(); translate([out_w + 10, 0, 0]) lid(); }

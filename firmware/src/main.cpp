@@ -63,7 +63,7 @@ static const int PIN_BL = 32;    // backlight enable (move display BLK here from
 TFT_eSPI tft = TFT_eSPI();
 WebSocketsClient ws;
 
-enum UiState { ST_BOOT, ST_SESSIONS, ST_MENU, ST_RUNNING, ST_APPROVAL, ST_RESULT };
+enum UiState { ST_BOOT, ST_SESSIONS, ST_MENU, ST_MONITOR, ST_RUNNING, ST_APPROVAL, ST_RESULT };
 UiState state = ST_BOOT;
 
 static const int MAX_PRESETS = 10;
@@ -263,6 +263,16 @@ void draw() {
       break;
     }
 
+    case ST_MONITOR: {
+      header("MONITOR", COL_ACCENT);
+      tft.setTextColor(COL_DIM, COL_BG);
+      tft.setTextDatum(TL_DATUM);
+      tft.drawString(statusText.substring(0, CHARS_PER_LINE), 8, BODY_Y, 1);
+      drawBody(logBuf, TFT_WHITE, BODY_Y + 14, 14);
+      footer("UP/DN scroll   BACK = sessions");
+      break;
+    }
+
     case ST_APPROVAL:
       header("APPROVE?", COL_WARN);
       tft.setTextColor(COL_ACCENT, COL_BG);
@@ -333,6 +343,16 @@ void handleMessage(const String &payload) {
     if (sessionSel >= sessionCount) sessionSel = 0;
     if (state == ST_BOOT || state == ST_SESSIONS) state = ST_SESSIONS;
     dirty = true;
+    return;
+  }
+
+  if (type == "monitor") {
+    statusText = String((const char *)(doc["name"] | "monitor"));
+    logBuf = "";
+    scroll = 0;
+    followBottom = true;
+    state = ST_MONITOR;
+    wake();
     return;
   }
 
@@ -464,15 +484,13 @@ void wake() {
   lastActivity = millis();
   if (screenAsleep) {
     screenAsleep = false;
-    digitalWrite(PIN_BL, HIGH);
-    tft.writecommand(0x29); // DISPON
+    digitalWrite(PIN_BL, HIGH); // backlight on; GRAM content is still there
   }
   dirty = true;
 }
 void sleepScreen() {
   screenAsleep = true;
-  tft.writecommand(0x28); // DISPOFF
-  digitalWrite(PIN_BL, LOW);
+  digitalWrite(PIN_BL, LOW); // backlight off only; panel keeps its content
 }
 
 // ---------- SETUP / LOOP ----------
@@ -567,6 +585,16 @@ void loop() {
       if (up) scrollBy(-3);
       if (down) scrollBy(3);
       if (back) sendInterrupt();
+      break;
+    case ST_MONITOR:
+      if (up) scrollBy(-3);
+      if (down) scrollBy(3);
+      if (back) {
+        JsonDocument d; d["type"] = "interrupt"; sendJson(d); // stop tailing
+        state = ST_SESSIONS;
+        JsonDocument l; l["type"] = "list"; sendJson(l);
+        dirty = true;
+      }
       break;
     case ST_APPROVAL:
       if (up) scrollBy(-3);

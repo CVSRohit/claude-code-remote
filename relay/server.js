@@ -2,30 +2,35 @@
  * Claude Code remote — relay (runs on Fly.io).
  *
  * A small stateless hub. Within one token "account" there can be many
- * **runners** (each = a session: a machine/folder running the Agent SDK) and
- * one or more **devices** (the ESP32 remotes). On boot a device gets the list
- * of sessions, picks one, and is then routed to that runner.
+ * **runners** (each PC running the Agent SDK) and one or more **devices**
+ * (ESP32 remotes). Each runner reports a list of **sessions** it can drive
+ * (its own "live" session plus resumable local Claude Code sessions). The relay
+ * merges those into one list, a device picks one, and is then routed to the
+ * owning runner.
  *
  * Holds no API key and no files — it only forwards JSON.
  *
- * hello (first message from each client):
- *   { "type":"hello", "role":"runner", "token":"…", "name":"my-repo" }
+ * hello (first message):
+ *   { "type":"hello", "role":"runner", "token":"…", "name":"my-pc" }
  *   { "type":"hello", "role":"device", "token":"…" }
  *
+ * Runner -> relay:
+ *   { "type":"sessions", "items":[{ "id":"live", "name":"my-pc (live)" }, …] }
+ *   …plus presets/status/tool/text/result for its attached device(s)
+ *
  * Relay -> device:
- *   { "type":"sessions", "items":[{ "id":"1", "name":"my-repo", "online":true }] }
- *   { "type":"relay", "event":"session-offline" }   // your selected runner left
- *   { "type":"relay", "event":"error", "text":"…" }
- *   …plus everything the selected runner sends (presets/status/tool/text/result)
+ *   { "type":"sessions", "items":[{ "id":"2:live", "name":"…", "online":true }] }
+ *   { "type":"relay", "event":"session-offline" }   // selected runner left
+ *   …plus everything the selected runner sends
  *
  * Device -> relay:
- *   { "type":"select", "id":"1" }   // choose a session to control
- *   { "type":"list" }               // re-request the session list
+ *   { "type":"select", "id":"2:live" }   // <runnerId>:<sessionRef>
+ *   { "type":"list" }
  *   …plus launch/approve/mode/interrupt -> forwarded to the selected runner
  *
  * Relay -> runner:
- *   { "type":"relay", "event":"paired", "id":"1" }
- *   { "type":"relay", "event":"device-attached" }   // a device selected you -> send presets
+ *   { "type":"relay", "event":"paired", "id":"2" }
+ *   { "type":"relay", "event":"device-attached", "session":"<sessionRef>" }
  */
 
 import http from "node:http";
@@ -48,10 +53,13 @@ function jsend(ws, obj) {
   if (ws && ws.readyState === ws.OPEN) ws.send(JSON.stringify(obj));
 }
 function sessionList(r) {
-  return {
-    type: "sessions",
-    items: [...r.runners.entries()].map(([id, ws]) => ({ id, name: ws._name, online: true })),
-  };
+  const items = [];
+  for (const [rid, ws] of r.runners) {
+    for (const s of ws._sessions || []) {
+      items.push({ id: rid + ":" + s.id, name: s.name, online: true });
+    }
+  }
+  return { type: "sessions", items };
 }
 function broadcastSessions(r) {
   const msg = sessionList(r);
@@ -93,16 +101,17 @@ wss.on("connection", (ws) => {
 
       if (ws._role === "runner") {
         ws._id = String(nextId++);
-        ws._name = String(h.name || ("session " + ws._id)).slice(0, 40);
+        ws._name = String(h.name || ("runner " + ws._id)).slice(0, 40);
+        ws._sessions = [];
         r.runners.set(ws._id, ws);
         jsend(ws, { type: "relay", event: "paired", id: ws._id });
         broadcastSessions(r);
-        console.log(`+ runner ${ws._id} "${ws._name}" room ${mask(h.token)} (${r.runners.size} sessions)`);
+        console.log(`+ runner ${ws._id} "${ws._name}" room ${mask(h.token)}`);
       } else {
         ws._boundId = null;
         r.devices.add(ws);
         jsend(ws, sessionList(r));
-        console.log(`+ device room ${mask(h.token)} (${r.runners.size} sessions)`);
+        console.log(`+ device room ${mask(h.token)}`);
       }
       return;
     }
@@ -113,23 +122,31 @@ wss.on("connection", (ws) => {
       let m;
       try { m = JSON.parse(text); } catch { return; }
       if (m.type === "select") {
-        ws._boundId = String(m.id);
-        const runner = r.runners.get(ws._boundId);
-        if (runner) jsend(runner, { type: "relay", event: "device-attached" });
+        const raw2 = String(m.id);
+        const i = raw2.indexOf(":");
+        const rid = i >= 0 ? raw2.slice(0, i) : raw2;
+        const sref = i >= 0 ? raw2.slice(i + 1) : "live";
+        ws._boundId = rid;
+        const runner = r.runners.get(rid);
+        if (runner) jsend(runner, { type: "relay", event: "device-attached", session: sref });
         else jsend(ws, { type: "relay", event: "session-offline" });
         return;
       }
-      if (m.type === "list") {
-        jsend(ws, sessionList(r));
-        return;
-      }
-      // forward control messages to the selected runner
+      if (m.type === "list") { jsend(ws, sessionList(r)); return; }
       const runner = ws._boundId ? r.runners.get(ws._boundId) : null;
       if (runner && runner.readyState === runner.OPEN) runner.send(text);
       return;
     }
 
-    // runner -> forward to every device that selected it
+    // runner -> relay
+    let m = null;
+    try { m = JSON.parse(text); } catch {}
+    if (m && m.type === "sessions") {
+      ws._sessions = Array.isArray(m.items) ? m.items : [];
+      broadcastSessions(r);
+      return;
+    }
+    // anything else: forward to the devices that selected this runner
     for (const d of r.devices) {
       if (d._boundId === ws._id && d.readyState === d.OPEN) d.send(text);
     }
@@ -156,7 +173,6 @@ wss.on("connection", (ws) => {
   });
 });
 
-// keepalive — drop dead sockets, ping the rest
 setInterval(() => {
   wss.clients.forEach((ws) => {
     if (ws.isAlive === false) { try { ws.terminate(); } catch {} return; }

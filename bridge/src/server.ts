@@ -26,9 +26,10 @@
 
 import { WebSocket } from "ws";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 
 // Load RELAY_URL / RELAY_TOKEN from bridge/.env if present (Node 22+).
 try {
@@ -59,6 +60,130 @@ const presets: PresetFile = JSON.parse(
 // Name shown in the device's session picker. Defaults to the working folder.
 const SESSION_NAME = process.env.SESSION_NAME ?? basename(presets.defaultCwd);
 
+// ---- session enumeration (your real Claude Code sessions, resumable) ----
+type SessionInfo = { id: string; name: string; cwd: string; kind: "live" | "monitor"; path?: string };
+const sessionMap = new Map<string, SessionInfo>();
+let activeSession: SessionInfo | null = null;
+let monitorState: { path: string; pos: number; timer: ReturnType<typeof setInterval> } | null = null;
+
+function readHead(path: string, bytes = 16384): string {
+  const fd = openSync(path, "r");
+  try {
+    const buf = Buffer.alloc(bytes);
+    const n = readSync(fd, buf, 0, bytes, 0);
+    return buf.toString("utf8", 0, n);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+// Recent local Claude Code sessions (newest first), excluding subagent transcripts.
+function listLocalSessions(max = 10): SessionInfo[] {
+  const root = join(homedir(), ".claude", "projects");
+  const files: { path: string; mtime: number }[] = [];
+  let dirs: string[] = [];
+  try { dirs = readdirSync(root); } catch { return []; }
+  for (const d of dirs) {
+    let entries: string[] = [];
+    try { entries = readdirSync(join(root, d)); } catch { continue; }
+    for (const f of entries) {
+      if (!f.endsWith(".jsonl") || f.startsWith("agent-")) continue;
+      const p = join(root, d, f);
+      try { files.push({ path: p, mtime: statSync(p).mtimeMs }); } catch {}
+    }
+  }
+  files.sort((a, b) => b.mtime - a.mtime);
+  const out: SessionInfo[] = [];
+  for (const { path } of files.slice(0, max)) {
+    const id = basename(path, ".jsonl");
+    let cwd = "";
+    let label = "";
+    try {
+      for (const line of readHead(path).split("\n")) {
+        if (!line.trim()) continue;
+        let o: any;
+        try { o = JSON.parse(line); } catch { continue; }
+        if (!cwd && o.cwd) cwd = o.cwd;
+        if (!label && o.type === "user" && o.message?.content) {
+          const c = o.message.content;
+          label = typeof c === "string"
+            ? c
+            : Array.isArray(c) ? (c.find((b: any) => b.type === "text")?.text ?? "") : "";
+        }
+        if (cwd && label) break;
+      }
+    } catch {}
+    if (!cwd) cwd = presets.defaultCwd;
+    const name = (basename(cwd) + (label ? " · " + label.replace(/\s+/g, " ") : "")).slice(0, 38);
+    out.push({ id, name, cwd, kind: "monitor", path });
+  }
+  return out;
+}
+
+// ---- read-only live monitor: tail a session transcript, stream it out ----
+function fmtEntry(o: any): string | null {
+  try {
+    if (o.type === "user" && o.message?.content) {
+      const c = o.message.content;
+      if (Array.isArray(c) && c.some((b: any) => b.type === "tool_result")) return null;
+      const t = typeof c === "string"
+        ? c
+        : Array.isArray(c) ? c.filter((b: any) => b.type === "text").map((b: any) => b.text).join(" ") : "";
+      return t.trim() ? "> " + t.trim() : null;
+    }
+    if (o.type === "assistant" && Array.isArray(o.message?.content)) {
+      const parts: string[] = [];
+      for (const b of o.message.content) {
+        if (b.type === "text" && b.text?.trim()) parts.push(b.text.trim());
+        else if (b.type === "tool_use") parts.push("[" + b.name + "] " + summarizeTool(b.name, b.input ?? {}));
+      }
+      return parts.length ? parts.join("\n") : null;
+    }
+  } catch {}
+  return null;
+}
+
+function readRegion(path: string, from: number, to: number): string {
+  const fd = openSync(path, "r");
+  try {
+    const buf = Buffer.alloc(Math.max(0, to - from));
+    const n = readSync(fd, buf, 0, buf.length, from);
+    return buf.toString("utf8", 0, n);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function pumpMonitor(): void {
+  if (!monitorState) return;
+  let size = 0;
+  try { size = statSync(monitorState.path).size; } catch { return; }
+  if (size <= monitorState.pos) return;
+  const chunk = readRegion(monitorState.path, monitorState.pos, size);
+  monitorState.pos = size;
+  for (const line of chunk.split("\n")) {
+    if (!line.trim()) continue;
+    let o: any;
+    try { o = JSON.parse(line); } catch { continue; }
+    const s = fmtEntry(o);
+    if (s) send({ type: "text", text: s.slice(0, 380) });
+  }
+}
+
+function startMonitor(sess: SessionInfo): void {
+  stopMonitor();
+  const path = sess.path!;
+  let size = 0;
+  try { size = statSync(path).size; } catch {}
+  monitorState = { path, pos: Math.max(0, size - 8000), timer: setInterval(pumpMonitor, 700) };
+  send({ type: "monitor", name: sess.name });
+  pumpMonitor(); // flush recent context immediately
+}
+
+function stopMonitor(): void {
+  if (monitorState) { clearInterval(monitorState.timer); monitorState = null; }
+}
+
 let sock: WebSocket | null = null;
 let mode: "ask" | "auto" = "ask";
 let busy = false;
@@ -80,6 +205,15 @@ function sendPresets(): void {
     mode,
   });
   send({ type: "status", state: busy ? "running" : "idle", text: "Idle", mode });
+}
+
+// "live" session + recent resumable Claude Code sessions, reported to the relay.
+function sendSessionList(): void {
+  const live: SessionInfo = { id: "live", name: SESSION_NAME + " (live)", cwd: presets.defaultCwd, kind: "live" };
+  const items = [live, ...listLocalSessions(10)];
+  sessionMap.clear();
+  for (const s of items) sessionMap.set(s.id, s);
+  send({ type: "sessions", items: items.map((s) => ({ id: s.id, name: s.name })) });
 }
 
 /** One-line, screen-friendly description of what a tool is about to do. */
@@ -155,7 +289,7 @@ async function runPrompt(
     return;
   }
   busy = true;
-  const cwd = preset.cwd ?? presets.defaultCwd;
+  const cwd = preset.cwd ?? activeSession?.cwd ?? presets.defaultCwd;
   send({ type: "status", state: "thinking", text: preset.label, mode });
 
   // The abort controller lets an "interrupt" message stop the run mid-flight.
@@ -239,6 +373,11 @@ function handleDeviceMessage(msg: any): void {
       break;
     }
     case "interrupt": {
+      if (monitorState) {
+        stopMonitor();
+        console.log("Stopped monitoring.");
+        break;
+      }
       if (currentAbort) {
         for (const resolve of pending.values()) resolve(false);
         pending.clear();
@@ -258,6 +397,7 @@ function connect(): void {
   sock.on("open", () => {
     console.log("Relay connected — registering as runner.");
     send({ type: "hello", role: "runner", token: RELAY_TOKEN, name: SESSION_NAME });
+    sendSessionList();
   });
 
   sock.on("message", (raw) => {
@@ -273,10 +413,21 @@ function connect(): void {
         case "paired":
           console.log(`Paired with relay as session "${SESSION_NAME}" (id ${msg.id}).`);
           break;
-        case "device-attached":
-          console.log("Device attached — sending presets.");
-          sendPresets();
+        case "device-attached": {
+          const sref = String(msg.session ?? "live");
+          const sess = sessionMap.get(sref) ?? sessionMap.get("live") ?? null;
+          stopMonitor();
+          if (sess && sess.kind === "monitor" && sess.path) {
+            activeSession = null;
+            console.log(`Monitoring session "${sess.name}".`);
+            startMonitor(sess);
+          } else {
+            activeSession = sess;
+            console.log(`Controlling session "${sess?.name ?? sref}".`);
+            sendPresets();
+          }
           break;
+        }
         case "error":
           console.error(`Relay rejected us: ${msg.text}`);
           break;
@@ -304,3 +455,8 @@ function connect(): void {
 console.log(`Claude Code remote runner. Presets: ${presets.items.map((p) => p.label).join(", ")}`);
 if (!RELAY_TOKEN) console.warn("WARNING: RELAY_TOKEN is empty — set it in bridge/.env");
 connect();
+
+// Refresh the session list periodically so newly-used sessions appear.
+setInterval(() => {
+  if (sock && sock.readyState === WebSocket.OPEN) sendSessionList();
+}, 30000);
